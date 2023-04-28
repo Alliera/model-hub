@@ -4,7 +4,7 @@ steps:
       - build
       - --tag=europe-docker.pkg.dev/sandsiv-infrastructure/vochub/model-hub:$TAG_NAME
       - -f
-      - vertex/Dockerfile.model
+      - Dockerfile
       - .
 
 timeout: 1200s
