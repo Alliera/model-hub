@@ -1,0 +1,15 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag=europe-docker.pkg.dev/sandsiv-infrastructure/vochub/model-hub:$TAG_NAME
+      - -f
+      - Dockerfile
+      - .
+
+timeout: 1200s
+images:
+  - 'europe-docker.pkg.dev/sandsiv-infrastructure/vochub/model-hub:$TAG_NAME'
+options:
+  machineType: N1_HIGHCPU_8
+  diskSizeGb: '200'
