@@ -18,10 +18,6 @@ func NewHandlers(manager *workers.WorkerManager) *Handlers {
 	return &Handlers{manager: manager}
 }
 
-type PredictResponse struct {
-	Predictions []string `json:"predictions"`
-}
-
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
@@ -56,7 +52,7 @@ func (h *Handlers) PredictHandler(w http.ResponseWriter, r *http.Request) {
 	preds, err := worker.Predict(req)
 	h.manager.SetWorkerAvailable(worker.ID)
 	if err != nil {
-		writeErrorJSON(w, http.StatusInternalServerError, "failed to get predictions")
+		writeErrorJSON(w, http.StatusInternalServerError, "failed to get predictions: "+err.Error())
 		return
 	}
 

@@ -78,7 +78,7 @@ func (w *Worker) SetAvailable() {
 	w.IsBusy = false
 }
 
-func (w *Worker) Predict(request models.PredictRequest) (response models.PredictResponse, err error) {
+func (w *Worker) Predict(request models.PredictRequest) (response interface{}, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 

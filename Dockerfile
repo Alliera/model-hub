@@ -10,10 +10,12 @@ RUN go mod download && go mod verify
 COPY . .
 RUN go build -ldflags "-s -w" -o /model-hub
 
-FROM huggingface/transformers-pytorch-gpu:latest
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+RUN apt-get update && apt-get install -y python3.10 python3-pip sudo curl
+RUN pip install torch==1.13.1 requests==2.29.0 transformers==4.28.1
 
 WORKDIR /bin
 COPY --from=0 /model-hub /bin/model-hub
 COPY ./worker.py /bin/worker.py
 
-CMD model-hub
+ENTRYPOINT ["model-hub"]

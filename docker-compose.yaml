@@ -4,4 +4,10 @@ services:
     build: .
     environment:
       - SERVER_PORT=8080
-#      - CONFIG_PATH=
+      - CONFIG_PATH=/etc/config.yaml
+    volumes:
+      - ./config.yaml:/etc/config.yaml
+      - ./handler.py:/etc/handler.py
+      - ./model:/models
+    ports:
+      - '9080:8080'
