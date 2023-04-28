@@ -1,0 +1,11 @@
+models:
+  model1:
+    name: "zeroshot"
+    path: "/src/model1"
+    handler: handler.py
+    workers: 2
+  model2:
+    name: "model2"
+    path: "/src/model2"
+    handler: handler.py
+    workers: 4
