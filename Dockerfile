@@ -12,7 +12,7 @@ RUN go build -ldflags "-s -w" -o /model-hub
 
 FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 RUN apt-get update && apt-get install -y python3.10 python3-pip sudo curl
-RUN pip install torch==1.13.1 requests==2.29.0 transformers==4.28.1
+RUN pip install requests==2.29.0
 
 WORKDIR /bin
 COPY --from=0 /model-hub /bin/model-hub
