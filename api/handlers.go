@@ -64,12 +64,13 @@ func (h *Handlers) PredictHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PingHandler(w http.ResponseWriter, r *http.Request) {
-	if h.manager.IsReady() {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	writeErrorJSON(w, http.StatusServiceUnavailable, "models are not ready")
+	w.WriteHeader(http.StatusOK)
+	//if h.manager.IsReady() {
+	//	w.WriteHeader(http.StatusOK)
+	//	return
+	//}
+	//
+	//writeErrorJSON(w, http.StatusServiceUnavailable, "models are not ready")
 }
 
 func (h *Handlers) ModelReady(w http.ResponseWriter, r *http.Request) {
