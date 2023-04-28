@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/shirou/gopsutil/v3/process"
 	"io"
 	"model-hub/config"
 	"model-hub/models"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"time"
 )
 
 type Worker struct {
@@ -47,6 +49,8 @@ func (w *Worker) Start() error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start worker %s: %v", w.ID, err)
 	}
+
+	go logResourceUsage(cmd.Process.Pid, w.ID) // вызов функции логирования в отдельной горутине
 
 	go func() {
 		_ = cmd.Wait()
@@ -120,4 +124,43 @@ func (w *Worker) Predict(request models.PredictRequest) (response interface{}, e
 	}
 
 	return response, nil
+}
+
+func logResourceUsage(pid int, workerId WorkerId) {
+	for {
+		time.Sleep(30 * time.Second)
+		p, err := process.NewProcess(int32(pid))
+		if err != nil {
+			fmt.Printf("Worker %s: failed to get process: %v\n", workerId, err)
+			continue
+		}
+
+		cpuPercent, err := p.CPUPercent()
+		if err != nil {
+			fmt.Printf("Worker %s: failed to get CPU usage: %v\n", workerId, err)
+		}
+
+		memInfo, err := p.MemoryInfo()
+		if err != nil {
+			fmt.Printf("Worker %s: failed to get memory usage: %v\n", workerId, err)
+		}
+
+		cmd := exec.Command(
+			"nvidia-smi",
+			"--query-gpu=memory.used,memory.total",
+			"--format=csv,noheader,nounits",
+		)
+		output, err := cmd.Output()
+		var gpuPercent float64 = 0
+
+		if err == nil {
+			var gpuMemoryUsed, gpuMemoryTotal uint64
+			_, _ = fmt.Sscanf(string(output), "%d, %d", &gpuMemoryUsed, &gpuMemoryTotal)
+			gpuPercent = (float64(gpuMemoryUsed) / float64(gpuMemoryTotal)) * 100
+		}
+
+		ramInMB := float64(memInfo.RSS) / (1024 * 1024)
+		fmt.Printf("⚙️ Worker [%s]: 🖥️ CPU: %.2f%% | 💾 RAM: %.2f MB | 🎮 GPU: %.2f%%\n",
+			workerId, cpuPercent, ramInMB, gpuPercent)
+	}
 }
