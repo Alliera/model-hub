@@ -1,15 +1,20 @@
 package api
 
 import (
+	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	"model-hub/helper"
 	"model-hub/workers"
+	"time"
 )
 
 func NewAPIServer(manager *workers.WorkerManager, logger *zap.Logger) {
 	handlers := NewHandlers(manager, logger)
-	r := gin.Default()
+
+	r := gin.New()
+	r.Use(ginzap.Ginzap(logger, time.RFC3339, true))
+	r.Use(ginzap.RecoveryWithZap(logger, true))
 
 	r.POST("/predict", handlers.PredictHandler)
 	r.GET("/ping", handlers.PingHandler)

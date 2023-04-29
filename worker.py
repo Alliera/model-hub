@@ -4,10 +4,11 @@ import sys
 import os
 import importlib.util
 import threading
-
+import logging
 import requests
-
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+logging.basicConfig(format='[%(levelname)s][%(threadName)s] %(message)s', level=logging.DEBUG)
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -26,12 +27,14 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if self.path == '/predict':
             if not handler.model_loaded:
+                logging.error('Model not loaded')
                 self.send_error(500, 'Model not loaded')
                 return
 
             try:
                 data = json.loads(post_data.decode('utf-8'))
             except json.JSONDecodeError:
+                logging.error('Invalid request JSON data')
                 self.send_error(400, 'Invalid request JSON data')
                 return
 
@@ -43,18 +46,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(prediction).encode('utf-8'))
 
         else:
+            logging.error('Invalid endpoint')
             self.send_error(404, 'Invalid endpoint')
-
-
-worker_id = ''
-
-
-def log_info(text):
-    print("[python-info][{}] {}".format(worker_id, text))
-
-
-def log_error(text):
-    print("[python-error][{}] {}".format(worker_id, text))
 
 
 if __name__ == '__main__':
@@ -64,10 +57,11 @@ if __name__ == '__main__':
     parser.add_argument('port', type=int)
     parser.add_argument('handler_path', type=str)
     args = parser.parse_args()
-    worker_id = args.worker_id
+
+    logging.info(f'Starting worker {args.worker_id}')
     handler_path = os.path.abspath(args.handler_path)
     if not os.path.isfile(handler_path):
-        log_error(f"Error: {args.handler_path} does not exist or is not a file")
+        logging.error(f"{args.handler_path} does not exist or is not a file")
         sys.exit(1)
 
     spec = importlib.util.spec_from_file_location('handler', handler_path)
@@ -78,26 +72,28 @@ if __name__ == '__main__':
 
 
     def load_and_notify():
-        log_info("Start loading model")
+        logging.info("Start loading model")
         handler.load_model(args.path)
-        log_info("Model ready!")
+        logging.info("Model ready!")
         port = os.getenv("SERVER_PORT", default="7766")
         model_ready_url = f"http://127.0.0.1:{port}/model-ready"
         model_ready_payload = {"worker_id": args.worker_id}
 
         try:
             requests.post(model_ready_url, json=model_ready_payload, timeout=500)
-            log_info("Notification model ready success!")
+            logging.info("Notification model ready success!")
         except:
-            log_info("Error: Failed to send model ready notification")
+            logging.error("Failed to send model ready notification")
 
 
-    load_thread = threading.Thread(target=load_and_notify)
+    load_thread = threading.Thread(target=load_and_notify, name='ModelLoader')
     load_thread.start()
 
     try:
         server = HTTPServer(('127.0.0.1', args.port), RequestHandler)
+        logging.info(f'Server started at http://127.0.0.1:{args.port}')
         server.serve_forever()
     except KeyboardInterrupt:
+        logging.info('Stopping server...')
         server.socket.close()
         sys.exit(0)

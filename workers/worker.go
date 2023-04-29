@@ -11,7 +11,6 @@ import (
 	"model-hub/config"
 	"model-hub/models"
 	"net/http"
-	"os"
 	"os/exec"
 	"strconv"
 	"sync"
@@ -57,9 +56,8 @@ func (w *Worker) Start() {
 	w.ctx, w.cancel = context.WithCancel(context.Background())
 	cmd := exec.Command("python3", "worker.py", string(w.ID), w.Model.Path, strconv.Itoa(w.port), w.Model.Handler)
 
-	// set stdout and stderr to os.Stdout
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = zap.NewStdLog(w.logger).Writer()
+	cmd.Stderr = zap.NewStdLog(w.logger).Writer()
 
 	if err := cmd.Start(); err != nil {
 		// In case than worker can't start, no use completing
@@ -189,9 +187,6 @@ func logResourceUsage(ctx context.Context, pid int, workerId WorkerId, logger *z
 			var gpuPercent float64 = 0
 
 			if err == nil {
-				nvidiaSmi := exec.Command("nvidia-smi")
-				nvidiaSmiOutput, _ := nvidiaSmi.Output()
-				logger.Info(string(nvidiaSmiOutput))
 				var gpuMemoryUsed, gpuMemoryTotal uint64
 				_, _ = fmt.Sscanf(string(output), "%d, %d", &gpuMemoryUsed, &gpuMemoryTotal)
 				gpuPercent = (float64(gpuMemoryUsed) / float64(gpuMemoryTotal)) * 100
