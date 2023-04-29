@@ -2,6 +2,7 @@ package workers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/shirou/gopsutil/v3/process"
@@ -17,29 +18,40 @@ import (
 )
 
 type Worker struct {
-	ID       WorkerId
-	Model    config.Model
-	IsLoaded bool
-	IsBusy   bool
-	cmd      *exec.Cmd
-	port     int
-	mu       sync.Mutex
+	ID               WorkerId
+	Model            config.Model
+	IsLoaded         bool
+	IsBusy           bool
+	startTime        time.Time
+	cmd              *exec.Cmd
+	port             int
+	mu               sync.Mutex
+	failedWorkerChan chan WorkerId
+	ctx              context.Context
+	cancel           context.CancelFunc
 }
 
-func NewWorker(id WorkerId, model config.Model, port int) *Worker {
+func NewWorker(id WorkerId, model config.Model, port int, failedWorkerChan chan WorkerId) *Worker {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Worker{
-		ID:       id,
-		Model:    model,
-		IsLoaded: false,
-		IsBusy:   false,
-		port:     port,
+		ID:               id,
+		Model:            model,
+		IsLoaded:         false,
+		IsBusy:           false,
+		port:             port,
+		failedWorkerChan: failedWorkerChan,
+		ctx:              ctx,
+		cancel:           cancel,
 	}
 }
 
-func (w *Worker) Start() error {
+func (w *Worker) Start() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
+	if w.cancel != nil {
+		w.cancel()
+	}
+	w.ctx, w.cancel = context.WithCancel(context.Background())
 	cmd := exec.Command("python3", "worker.py", string(w.ID), w.Model.Path, strconv.Itoa(w.port), w.Model.Handler)
 
 	// set stdout and stderr to os.Stdout
@@ -47,18 +59,36 @@ func (w *Worker) Start() error {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start worker %s: %v", w.ID, err)
+		// In case than worker can't start, no use completing
+		panic(fmt.Sprintf("failed to start worker %s: %v", w.ID, err))
 	}
-
-	go logResourceUsage(cmd.Process.Pid, w.ID) // вызов функции логирования в отдельной горутине
+	w.startTime = time.Now()
+	go logResourceUsage(w.ctx, cmd.Process.Pid, w.ID)
 
 	go func() {
-		_ = cmd.Wait()
+		err := cmd.Wait()
+		if err != nil {
+			elapsedTime := time.Since(w.startTime)
+			hours := int(elapsedTime.Hours())
+			minutes := int(elapsedTime.Minutes()) % 60
+			seconds := int(elapsedTime.Seconds()) % 60
+
+			// Форматируем строку с временем
+			timeString := ""
+			if hours > 0 {
+				timeString = fmt.Sprintf("%d hours ", hours)
+			}
+			if minutes > 0 {
+				timeString += fmt.Sprintf("%d minutes ", minutes)
+			}
+			timeString += fmt.Sprintf("%d seconds", seconds)
+
+			_, _ = fmt.Fprintf(os.Stderr, "Worker %s: command exited with error: %v, worked for %s\n", w.ID, err, timeString)
+			w.failedWorkerChan <- w.ID
+		}
 	}()
 
 	w.cmd = cmd
-
-	return nil
 }
 
 func (w *Worker) SetLoaded() {
@@ -126,41 +156,47 @@ func (w *Worker) Predict(request models.PredictRequest) (response interface{}, e
 	return response, nil
 }
 
-func logResourceUsage(pid int, workerId WorkerId) {
+func logResourceUsage(ctx context.Context, pid int, workerId WorkerId) {
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			p, err := process.NewProcess(int32(pid))
+			if err != nil {
+				fmt.Printf("Worker %s: failed to get process: %v\n", workerId, err)
+				continue
+			}
+
+			cpuPercent, err := p.CPUPercent()
+			if err != nil {
+				fmt.Printf("Worker %s: failed to get CPU usage: %v\n", workerId, err)
+			}
+
+			memInfo, err := p.MemoryInfo()
+			if err != nil {
+				fmt.Printf("Worker %s: failed to get memory usage: %v\n", workerId, err)
+			}
+
+			cmd := exec.Command(
+				"nvidia-smi",
+				"--query-gpu=memory.used,memory.total",
+				"--format=csv,noheader,nounits",
+			)
+			output, err := cmd.Output()
+			var gpuPercent float64 = 0
+
+			if err == nil {
+				var gpuMemoryUsed, gpuMemoryTotal uint64
+				_, _ = fmt.Sscanf(string(output), "%d, %d", &gpuMemoryUsed, &gpuMemoryTotal)
+				gpuPercent = (float64(gpuMemoryUsed) / float64(gpuMemoryTotal)) * 100
+			}
+
+			ramInMB := float64(memInfo.RSS) / (1024 * 1024)
+			fmt.Printf("⚙️ Worker [%s]: 🖥️ CPU: %.2f%% | 💾 RAM: %.2f MB | 🎮 GPU: %.2f%%\n",
+				workerId, cpuPercent, ramInMB, gpuPercent)
+		}
+
 		time.Sleep(30 * time.Second)
-		p, err := process.NewProcess(int32(pid))
-		if err != nil {
-			fmt.Printf("Worker %s: failed to get process: %v\n", workerId, err)
-			continue
-		}
-
-		cpuPercent, err := p.CPUPercent()
-		if err != nil {
-			fmt.Printf("Worker %s: failed to get CPU usage: %v\n", workerId, err)
-		}
-
-		memInfo, err := p.MemoryInfo()
-		if err != nil {
-			fmt.Printf("Worker %s: failed to get memory usage: %v\n", workerId, err)
-		}
-
-		cmd := exec.Command(
-			"nvidia-smi",
-			"--query-gpu=memory.used,memory.total",
-			"--format=csv,noheader,nounits",
-		)
-		output, err := cmd.Output()
-		var gpuPercent float64 = 0
-
-		if err == nil {
-			var gpuMemoryUsed, gpuMemoryTotal uint64
-			_, _ = fmt.Sscanf(string(output), "%d, %d", &gpuMemoryUsed, &gpuMemoryTotal)
-			gpuPercent = (float64(gpuMemoryUsed) / float64(gpuMemoryTotal)) * 100
-		}
-
-		ramInMB := float64(memInfo.RSS) / (1024 * 1024)
-		fmt.Printf("⚙️ Worker [%s]: 🖥️ CPU: %.2f%% | 💾 RAM: %.2f MB | 🎮 GPU: %.2f%%\n",
-			workerId, cpuPercent, ramInMB, gpuPercent)
 	}
 }

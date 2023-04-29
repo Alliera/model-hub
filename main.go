@@ -16,9 +16,7 @@ func main() {
 
 	workerManager := workers.NewWorkerManager(cfg)
 	log.Println("Starting workers")
-	if err := workerManager.Initialize(); err != nil {
-		log.Fatalf("Failed to initialize worker manager: %v", err)
-	}
+	workerManager.Initialize()
 
 	api.NewAPIServer(workerManager)
 }
