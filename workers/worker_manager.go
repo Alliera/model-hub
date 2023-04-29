@@ -2,9 +2,11 @@ package workers
 
 import (
 	"fmt"
+	"github.com/shirou/gopsutil/v3/process"
 	"go.uber.org/zap"
 	"model-hub/config"
 	"model-hub/models"
+	"os/exec"
 	"sync"
 	"time"
 )
@@ -20,39 +22,78 @@ type WorkerManager struct {
 	logger           *zap.Logger
 }
 
-func (wm *WorkerManager) updateWorkerChannel(modelName models.ModelName, newChan chan *Worker) {
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-	wm.workerChan[modelName] = newChan
+func (wm *WorkerManager) logResourceUsage() {
+	for {
+		cmd := exec.Command(
+			"nvidia-smi",
+			"--query-gpu=memory.used,memory.total",
+			"--format=csv,noheader,nounits",
+		)
+		output, err := cmd.Output()
+		var gpuPercent float64 = 0
+
+		if err == nil {
+			var gpuMemoryUsed, gpuMemoryTotal uint64
+			_, _ = fmt.Sscanf(string(output), "%d, %d", &gpuMemoryUsed, &gpuMemoryTotal)
+			gpuPercent = (float64(gpuMemoryUsed) / float64(gpuMemoryTotal)) * 100
+		}
+		wm.logger.Info(fmt.Sprintf("====== 🎮TOTAL GPU USAGE:  %.2f%% =======", gpuPercent))
+		for _, worker := range wm.workers {
+			if !worker.IsLaunched() {
+				continue
+			}
+			p, err := process.NewProcess(int32(worker.cmd.Process.Pid))
+			if err != nil {
+				wm.logger.Error("Failed to get process", zap.String("workerId", string(worker.ID)), zap.Error(err))
+				continue
+			}
+			cpuPercent, err := p.CPUPercent()
+			if err != nil {
+				wm.logger.Error("Failed to get CPU usage", zap.String("workerId", string(worker.ID)), zap.Error(err))
+			}
+
+			memInfo, err := p.MemoryInfo()
+			if err != nil {
+				wm.logger.Error("Failed to get memory usage", zap.String("workerId", string(worker.ID)), zap.Error(err))
+			}
+
+			ramInMB := float64(memInfo.RSS) / (1024 * 1024)
+			wm.logger.Info(fmt.Sprintf("⚙️ Worker [%s]: 🖥️ CPU: %.2f%% | 💾 RAM: %.2f MB",
+				worker.ID, cpuPercent, ramInMB))
+
+		}
+
+		time.Sleep(30 * time.Second)
+	}
 }
 
 func (wm *WorkerManager) removeWorkerFromChannel(worker *Worker) {
 	workerChan := wm.workerChan[worker.Model.Name]
 	updatedChan := make(chan *Worker, cap(workerChan))
 
-	for {
-		if len(workerChan) == 0 {
-			break
-		}
-
-		w := <-workerChan
+	close(workerChan)
+	for w := range workerChan {
 		if w.ID != worker.ID {
 			updatedChan <- w
 		}
 	}
 
-	wm.updateWorkerChannel(worker.Model.Name, updatedChan)
+	wm.workerChan[worker.Model.Name] = updatedChan
 }
 
-func (wm *WorkerManager) HandleFailedWorker() {
+func (wm *WorkerManager) handleFailedWorker() {
 	for {
 		failedWorkerID := <-wm.failedWorkerChan
 		worker, ok := wm.workers[failedWorkerID]
 		if ok {
-			wm.removeWorkerFromChannel(worker)
-			wm.logger.Info(fmt.Sprintf("Worker %s: Waiting 5 seconds before restarting", worker.ID))
-			time.Sleep(5 * time.Second)
-			worker.Start()
+			go func() {
+				worker.SetUnLoaded()
+				worker.SetExited()
+				wm.removeWorkerFromChannel(worker)
+				wm.logger.Info(fmt.Sprintf("Worker %s: Waiting 5 seconds before restarting", worker.ID))
+				time.Sleep(5 * time.Second)
+				worker.Start()
+			}()
 		}
 	}
 }
@@ -74,7 +115,6 @@ func NewWorkerManager(cfg *config.Config, logger *zap.Logger) *WorkerManager {
 			workers[workerID] = worker
 		}
 	}
-
 	return &WorkerManager{
 		workers:          workers,
 		workerChan:       workerChan,
@@ -88,7 +128,7 @@ func (wm *WorkerManager) IsReady() bool {
 	for _, modelName := range wm.modelNames {
 		hasAnyLoaded := false
 		for _, worker := range wm.workers {
-			if worker.Model.Name == modelName && worker.IsLoaded {
+			if worker.Model.Name == modelName && worker.Loaded {
 				hasAnyLoaded = true
 			}
 		}
@@ -100,7 +140,8 @@ func (wm *WorkerManager) IsReady() bool {
 }
 
 func (wm *WorkerManager) Initialize() {
-	go wm.HandleFailedWorker()
+	go wm.handleFailedWorker()
+	go wm.logResourceUsage()
 	for _, worker := range wm.workers {
 		worker.Start()
 	}

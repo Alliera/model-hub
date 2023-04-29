@@ -39,7 +39,7 @@ func (h *Handlers) PredictHandler(c *gin.Context) {
 	preds, err := worker.Predict(req)
 	h.manager.SetWorkerAvailable(worker.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get predictions: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
 		return
 	}
 

@@ -5,6 +5,8 @@ import os
 import importlib.util
 import threading
 import logging
+import time
+
 import requests
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -37,9 +39,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                 logging.error('Invalid request JSON data')
                 self.send_error(400, 'Invalid request JSON data')
                 return
-
-            prediction = handler.predict(data)
-
+            try:
+                 prediction = handler.predict(data)
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(str(e).encode('utf-8'))
+                return
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
@@ -70,28 +77,31 @@ if __name__ == '__main__':
 
     handler = handler_module.Handler()
 
-
-    def load_and_notify():
-        logging.info("Start loading model")
+    logging.info("Start loading model")
+    try:
         handler.load_model(args.path)
-        logging.info("Model ready!")
+    except Exception as load_model_exception:
+        logging.error(f"Failed to load model: {load_model_exception}")
+        sys.exit(1)
+    logging.info("Model loaded")
+
+
+    def notify_ready():
+        time.sleep(1)
         port = os.getenv("SERVER_PORT", default="7766")
         model_ready_url = f"http://127.0.0.1:{port}/model-ready"
         model_ready_payload = {"worker_id": args.worker_id}
-
         try:
             requests.post(model_ready_url, json=model_ready_payload, timeout=500)
-            logging.info("Notification model ready success!")
-        except:
-            logging.error("Failed to send model ready notification")
+        except Exception as notify_ready_exception:
+            logging.error(f"Failed to send model ready notification: {notify_ready_exception}")
 
 
-    load_thread = threading.Thread(target=load_and_notify, name='ModelLoader')
+    load_thread = threading.Thread(target=notify_ready, name='ReadyNotifier')
     load_thread.start()
-
     try:
         server = HTTPServer(('127.0.0.1', args.port), RequestHandler)
-        logging.info(f'Server started at http://127.0.0.1:{args.port}')
+        logging.info(f'Python worker REST started at http://127.0.0.1:{args.port}')
         server.serve_forever()
     except KeyboardInterrupt:
         logging.info('Stopping server...')

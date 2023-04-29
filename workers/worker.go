@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/shirou/gopsutil/v3/process"
 	"go.uber.org/zap"
 	"io"
 	"model-hub/config"
 	"model-hub/models"
 	"net/http"
+	"os"
 	"os/exec"
 	"strconv"
 	"sync"
@@ -20,8 +21,9 @@ import (
 type Worker struct {
 	ID               WorkerId
 	Model            config.Model
-	IsLoaded         bool
-	IsBusy           bool
+	Launched         bool
+	Loaded           bool
+	Busy             bool
 	startTime        time.Time
 	cmd              *exec.Cmd
 	port             int
@@ -37,8 +39,9 @@ func NewWorker(id WorkerId, model config.Model, port int, failedWorkerChan chan 
 	return &Worker{
 		ID:               id,
 		Model:            model,
-		IsLoaded:         false,
-		IsBusy:           false,
+		Loaded:           false,
+		Busy:             false,
+		Launched:         false,
 		port:             port,
 		failedWorkerChan: failedWorkerChan,
 		ctx:              ctx,
@@ -56,15 +59,14 @@ func (w *Worker) Start() {
 	w.ctx, w.cancel = context.WithCancel(context.Background())
 	cmd := exec.Command("python3", "worker.py", string(w.ID), w.Model.Path, strconv.Itoa(w.port), w.Model.Handler)
 
-	cmd.Stdout = zap.NewStdLog(w.logger).Writer()
-	cmd.Stderr = zap.NewStdLog(w.logger).Writer()
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		// In case than worker can't start, no use completing
 		panic(fmt.Sprintf("failed to start worker %s: %v", w.ID, err))
 	}
+	w.Launched = true
 	w.startTime = time.Now()
-	go logResourceUsage(w.ctx, cmd.Process.Pid, w.ID, w.logger)
 
 	go func() {
 		err := cmd.Wait()
@@ -74,7 +76,6 @@ func (w *Worker) Start() {
 			minutes := int(elapsedTime.Minutes()) % 60
 			seconds := int(elapsedTime.Seconds()) % 60
 
-			// Форматируем строку с временем
 			timeString := ""
 			if hours > 0 {
 				timeString = fmt.Sprintf("%d hours ", hours)
@@ -96,21 +97,49 @@ func (w *Worker) SetLoaded() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	w.IsLoaded = true
+	w.Loaded = true
+}
+
+func (w *Worker) IsLaunched() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.Launched
+}
+
+func (w *Worker) SetLaunched() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.Launched = true
+}
+
+func (w *Worker) SetExited() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.Launched = false
+}
+
+func (w *Worker) SetUnLoaded() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.Loaded = false
 }
 
 func (w *Worker) SetBusy() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	w.IsBusy = true
+	w.Busy = true
 }
 
 func (w *Worker) SetAvailable() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	w.IsBusy = false
+	w.Busy = false
 }
 
 func (w *Worker) Predict(request models.PredictRequest) (response interface{}, err error) {
@@ -138,13 +167,13 @@ func (w *Worker) Predict(request models.PredictRequest) (response interface{}, e
 		return response, fmt.Errorf("worker %s: failed to send POST request: %v", w.ID, err)
 	}
 	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		return response, fmt.Errorf("worker %s: server returned non-200 status code: %d", w.ID, resp.StatusCode)
+		return response, errors.New(string(respBody))
 	}
 
 	// Read and unmarshal the response
-	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return response, fmt.Errorf("worker %s: failed to read response body: %v", w.ID, err)
 	}
@@ -155,48 +184,4 @@ func (w *Worker) Predict(request models.PredictRequest) (response interface{}, e
 	}
 
 	return response, nil
-}
-
-func logResourceUsage(ctx context.Context, pid int, workerId WorkerId, logger *zap.Logger) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			p, err := process.NewProcess(int32(pid))
-			if err != nil {
-				logger.Error("Failed to get process", zap.String("workerId", string(workerId)), zap.Error(err))
-				continue
-			}
-			cpuPercent, err := p.CPUPercent()
-			if err != nil {
-				logger.Error("Failed to get CPU usage", zap.String("workerId", string(workerId)), zap.Error(err))
-			}
-
-			memInfo, err := p.MemoryInfo()
-			if err != nil {
-				logger.Error("Failed to get memory usage", zap.String("workerId", string(workerId)), zap.Error(err))
-			}
-
-			cmd := exec.Command(
-				"nvidia-smi",
-				"--query-gpu=memory.used,memory.total",
-				"--format=csv,noheader,nounits",
-			)
-			output, err := cmd.Output()
-			var gpuPercent float64 = 0
-
-			if err == nil {
-				var gpuMemoryUsed, gpuMemoryTotal uint64
-				_, _ = fmt.Sscanf(string(output), "%d, %d", &gpuMemoryUsed, &gpuMemoryTotal)
-				gpuPercent = (float64(gpuMemoryUsed) / float64(gpuMemoryTotal)) * 100
-			}
-
-			ramInMB := float64(memInfo.RSS) / (1024 * 1024)
-			logger.Info(fmt.Sprintf("⚙️ Worker [%s]: 🖥️ CPU: %.2f%% | 💾 RAM: %.2f MB | 🎮 GPU: %.2f%%",
-				workerId, cpuPercent, ramInMB, gpuPercent))
-		}
-
-		time.Sleep(30 * time.Second)
-	}
 }
