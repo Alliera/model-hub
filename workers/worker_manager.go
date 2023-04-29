@@ -2,6 +2,7 @@ package workers
 
 import (
 	"fmt"
+	"go.uber.org/zap"
 	"model-hub/config"
 	"model-hub/models"
 	"sync"
@@ -16,6 +17,7 @@ type WorkerManager struct {
 	failedWorkerChan chan WorkerId
 	modelNames       []models.ModelName
 	mu               sync.Mutex
+	logger           *zap.Logger
 }
 
 func (wm *WorkerManager) updateWorkerChannel(modelName models.ModelName, newChan chan *Worker) {
@@ -26,13 +28,14 @@ func (wm *WorkerManager) updateWorkerChannel(modelName models.ModelName, newChan
 
 func (wm *WorkerManager) removeWorkerFromChannel(worker *Worker) {
 	workerChan := wm.workerChan[worker.Model.Name]
-	if len(workerChan) == 0 {
-		return
-	}
-
 	updatedChan := make(chan *Worker, cap(workerChan))
 
-	for w := range workerChan {
+	for {
+		if len(workerChan) == 0 {
+			break
+		}
+
+		w := <-workerChan
 		if w.ID != worker.ID {
 			updatedChan <- w
 		}
@@ -47,14 +50,14 @@ func (wm *WorkerManager) HandleFailedWorker() {
 		worker, ok := wm.workers[failedWorkerID]
 		if ok {
 			wm.removeWorkerFromChannel(worker)
-			fmt.Println(fmt.Sprintf("Worker %s: Waiting 5 seconds before restarting", worker.ID))
+			wm.logger.Info(fmt.Sprintf("Worker %s: Waiting 5 seconds before restarting", worker.ID))
 			time.Sleep(5 * time.Second)
 			worker.Start()
 		}
 	}
 }
 
-func NewWorkerManager(cfg *config.Config) *WorkerManager {
+func NewWorkerManager(cfg *config.Config, logger *zap.Logger) *WorkerManager {
 	workers := make(map[WorkerId]*Worker)
 	workerChan := make(map[models.ModelName]chan *Worker)
 	var modelNames []models.ModelName
@@ -67,7 +70,7 @@ func NewWorkerManager(cfg *config.Config) *WorkerManager {
 		for i := 1; i <= model.Workers; i++ {
 			port += 1
 			workerID := WorkerId(fmt.Sprintf("%s-%d", model.Name, i))
-			worker := NewWorker(workerID, model, port, failedWorkerChan)
+			worker := NewWorker(workerID, model, port, failedWorkerChan, logger)
 			workers[workerID] = worker
 		}
 	}
@@ -77,6 +80,7 @@ func NewWorkerManager(cfg *config.Config) *WorkerManager {
 		workerChan:       workerChan,
 		failedWorkerChan: failedWorkerChan,
 		modelNames:       modelNames,
+		logger:           logger,
 	}
 }
 
@@ -105,7 +109,7 @@ func (wm *WorkerManager) Initialize() {
 func (wm *WorkerManager) GetAvailableWorker(modelName models.ModelName) (*Worker, error) {
 	workerChan, ok := wm.workerChan[modelName]
 	if !ok {
-		return nil, fmt.Errorf("no worker channel for the requested model: %s", modelName)
+		return nil, fmt.Errorf("no worker channel for the requested model:%s", modelName)
 	}
 
 	worker := <-workerChan

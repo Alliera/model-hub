@@ -1,10 +1,8 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
-	"io"
-	"log"
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 	"model-hub/models"
 	"model-hub/workers"
 	"net/http"
@@ -12,90 +10,56 @@ import (
 
 type Handlers struct {
 	manager *workers.WorkerManager
+	logger  *zap.Logger
 }
 
-func NewHandlers(manager *workers.WorkerManager) *Handlers {
-	return &Handlers{manager: manager}
+func NewHandlers(manager *workers.WorkerManager, logger *zap.Logger) *Handlers {
+	return &Handlers{manager: manager, logger: logger}
 }
 
-type ErrorResponse struct {
-	Error string `json:"error"`
-}
-
-func writeErrorJSON(w http.ResponseWriter, status int, msg string) {
-	w.WriteHeader(status)
-	err := json.NewEncoder(w).Encode(ErrorResponse{Error: msg})
-	if err != nil {
-		log.Println("failed to encode error JSON:", err)
-	}
-}
-
-func (h *Handlers) PredictHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) PredictHandler(c *gin.Context) {
 	var req models.PredictRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, "failed to decode request body")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to decode request body"})
 		return
 	}
 	modelString, ok := req.Params["model"].(string)
 	if !ok {
-		writeErrorJSON(w, http.StatusBadRequest, "model parameter is missing or has an invalid format")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "model parameter is missing or has an invalid format"})
 		return
 	}
 	model := models.ModelName(modelString)
 
 	worker, err := h.manager.GetAvailableWorker(model)
 	if err != nil {
-		writeErrorJSON(w, http.StatusInternalServerError, "failed to get available worker")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get available worker"})
 		return
 	}
 
 	preds, err := worker.Predict(req)
 	h.manager.SetWorkerAvailable(worker.ID)
 	if err != nil {
-		writeErrorJSON(w, http.StatusInternalServerError, "failed to get predictions: "+err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get predictions: " + err.Error()})
 		return
 	}
 
-	err = json.NewEncoder(w).Encode(&preds)
-	if err != nil {
-		writeErrorJSON(w, http.StatusInternalServerError, "failed to encode response body")
-		return
-	}
+	c.JSON(http.StatusOK, preds)
 }
 
-func (h *Handlers) PingHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	//if h.manager.IsReady() {
-	//	w.WriteHeader(http.StatusOK)
-	//	return
-	//}
-	//
-	//writeErrorJSON(w, http.StatusServiceUnavailable, "models are not ready")
+func (h *Handlers) PingHandler(c *gin.Context) {
+	c.Status(http.StatusOK)
 }
 
-func (h *Handlers) ModelReady(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, "failed to read request body")
-		return
-	}
-
+func (h *Handlers) ModelReady(c *gin.Context) {
 	var data struct {
 		WorkerId workers.WorkerId `json:"worker_id"`
 	}
 
-	if err := json.Unmarshal(body, &data); err != nil {
-		fmt.Println("failed to unmarshal request body!")
-		writeErrorJSON(w, http.StatusBadRequest, "failed to unmarshal request body")
+	if err := c.ShouldBindJSON(&data); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to unmarshal request body"})
 		return
 	}
 
 	h.manager.SetWorkerAvailable(data.WorkerId)
-
-	w.WriteHeader(http.StatusOK)
+	c.Status(http.StatusOK)
 }

@@ -50,11 +50,11 @@ worker_id = ''
 
 
 def log_info(text):
-    print("[{}] {}".format(worker_id, text))
+    print("[python-info][{}] {}".format(worker_id, text))
 
 
 def log_error(text):
-    print("[{}] {}".format(worker_id, text))
+    print("[python-error][{}] {}".format(worker_id, text))
 
 
 if __name__ == '__main__':
