@@ -81,28 +81,18 @@ func (w *Worker) Start() {
 	w.cmd = cmd
 }
 
-func (w *Worker) ElapsedTimeString() string {
-	elapsedTime := time.Since(w.startTime)
-	hours := int(elapsedTime.Hours())
-	minutes := int(elapsedTime.Minutes()) % 60
-	seconds := int(elapsedTime.Seconds()) % 60
-
-	timeString := ""
-	if hours > 0 {
-		timeString = fmt.Sprintf("%d hours ", hours)
-	}
-	if minutes > 0 {
-		timeString += fmt.Sprintf("%d minutes ", minutes)
-	}
-	timeString += fmt.Sprintf("%d seconds", seconds)
-	return timeString
-}
-
 func (w *Worker) SetLoaded() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	w.Loaded = true
+}
+
+func (w *Worker) IsLoaded() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.Loaded
 }
 
 func (w *Worker) IsLaunched() bool {

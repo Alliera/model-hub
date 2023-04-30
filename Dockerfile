@@ -18,4 +18,10 @@ WORKDIR /bin
 COPY --from=0 /model-hub /bin/model-hub
 COPY ./worker.py /bin/worker.py
 
+ENV CONFIG_PATH="/etc/config.yaml"
+ENV SERVER_PORT="8080"
+ENV METRICS_DISPLAY_FREQUENCY="30"
+ENV WORKERS_LOADING_STRATEGY="parallel"
+
+
 ENTRYPOINT ["model-hub"]
