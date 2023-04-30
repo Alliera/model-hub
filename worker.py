@@ -10,7 +10,14 @@ import time
 import requests
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-logging.basicConfig(format='[%(levelname)s][%(threadName)s] %(message)s', level=logging.DEBUG)
+parser = argparse.ArgumentParser()
+parser.add_argument('worker_id', type=str)
+parser.add_argument('path', type=str)
+parser.add_argument('port', type=int)
+parser.add_argument('handler_path', type=str)
+args = parser.parse_args()
+
+logging.basicConfig(format=f'[%(levelname)s][Python worker][{args.worker_id}] %(message)s', level=logging.INFO)
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -40,7 +47,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_error(400, 'Invalid request JSON data')
                 return
             try:
-                 prediction = handler.predict(data)
+                prediction = handler.predict(data)
             except Exception as e:
                 self.send_response(500)
                 self.send_header('Content-type', 'application/json')
@@ -58,13 +65,6 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('worker_id', type=str)
-    parser.add_argument('path', type=str)
-    parser.add_argument('port', type=int)
-    parser.add_argument('handler_path', type=str)
-    args = parser.parse_args()
-
     logging.info(f'Starting worker {args.worker_id}')
     handler_path = os.path.abspath(args.handler_path)
     if not os.path.isfile(handler_path):
