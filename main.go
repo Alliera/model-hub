@@ -23,7 +23,7 @@ func main() {
 
 	workerManager := workers.NewWorkerManager(cfg, logger)
 	logger.Info("Starting workers")
-	workerManager.Initialize()
+	go workerManager.Initialize()
 
 	api.NewAPIServer(workerManager, logger)
 }
