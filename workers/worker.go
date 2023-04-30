@@ -71,19 +71,7 @@ func (w *Worker) Start() {
 	go func() {
 		err := cmd.Wait()
 		if err != nil {
-			elapsedTime := time.Since(w.startTime)
-			hours := int(elapsedTime.Hours())
-			minutes := int(elapsedTime.Minutes()) % 60
-			seconds := int(elapsedTime.Seconds()) % 60
-
-			timeString := ""
-			if hours > 0 {
-				timeString = fmt.Sprintf("%d hours ", hours)
-			}
-			if minutes > 0 {
-				timeString += fmt.Sprintf("%d minutes ", minutes)
-			}
-			timeString += fmt.Sprintf("%d seconds", seconds)
+			timeString := w.ElapsedTimeString()
 
 			w.logger.Error(fmt.Sprintf("Worker %s: command exited with error: %v, worked for %s", w.ID, err, timeString))
 			w.failedWorkerChan <- w.ID
@@ -91,6 +79,23 @@ func (w *Worker) Start() {
 	}()
 
 	w.cmd = cmd
+}
+
+func (w *Worker) ElapsedTimeString() string {
+	elapsedTime := time.Since(w.startTime)
+	hours := int(elapsedTime.Hours())
+	minutes := int(elapsedTime.Minutes()) % 60
+	seconds := int(elapsedTime.Seconds()) % 60
+
+	timeString := ""
+	if hours > 0 {
+		timeString = fmt.Sprintf("%d hours ", hours)
+	}
+	if minutes > 0 {
+		timeString += fmt.Sprintf("%d minutes ", minutes)
+	}
+	timeString += fmt.Sprintf("%d seconds", seconds)
+	return timeString
 }
 
 func (w *Worker) SetLoaded() {
