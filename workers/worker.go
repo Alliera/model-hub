@@ -60,7 +60,7 @@ func (w *Worker) Start() {
 	cmd := exec.Command("python3", "worker.py", string(w.ID), w.Model.Path, strconv.Itoa(w.port), w.Model.Handler)
 
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = os.Stdout
 
 	if err := cmd.Start(); err != nil {
 		panic(fmt.Sprintf("failed to start worker %s: %v", w.ID, err))
